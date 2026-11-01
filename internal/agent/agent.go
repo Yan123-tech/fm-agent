@@ -29,6 +29,8 @@ type Agent struct {
 
 	windowTokens int
 
+	measuredPrompt int
+
 	history   []serve.Message
 	lastUsage *serve.Usage
 }
@@ -125,13 +127,16 @@ func (a *Agent) Run(ctx context.Context, userText string) error {
 			Messages: append([]serve.Message(nil), a.history...),
 			Tools:    a.reg.Specs(),
 		}
-		resp, err := a.srv.ChatStream(ctx, req, func(d string) {
-			fmt.Fprint(a.out, d)
-		})
+		// On context overflow, shrink the assumed window, compact and retry
+		// the same step before giving up (handles 4096-token devices).
+		resp, err := a.withOverflowRetry(ctx, req)
 		if err != nil {
 			return err
 		}
 		a.lastUsage = resp.Usage
+		if resp.Usage != nil && resp.Usage.PromptTokens > a.measuredPrompt {
+			a.measuredPrompt = resp.Usage.PromptTokens
+		}
 		msg := resp.Message
 		msg.Role = "assistant"
 
@@ -156,6 +161,33 @@ func (a *Agent) Run(ctx context.Context, userText string) error {
 		}
 	}
 	return ErrMaxIterations
+}
+
+// withOverflowRetry calls the model and, on context_length_exceeded, halves
+// the assumed window (down to MinWindowTokens), compacts old history and
+// retries — so the same binary works on 4096- and 8192-token devices.
+func (a *Agent) withOverflowRetry(ctx context.Context, req *serve.ChatRequest) (*serve.ChatResponse, error) {
+	var lastErr error
+	for shrink := 0; shrink < 4; shrink++ {
+		resp, err := a.srv.ChatStream(ctx, req, func(d string) {
+			fmt.Fprint(a.out, d)
+		})
+		if err == nil {
+			return resp, nil
+		}
+		var apiErr *serve.APIError
+		if !errors.As(err, &apiErr) || apiErr.Code != "context_length_exceeded" || a.windowTokens <= MinWindowTokens {
+			return nil, err
+		}
+		lastErr = err
+		a.windowTokens = max(a.windowTokens/2, MinWindowTokens)
+		fmt.Fprintf(a.out, "\n(context window is smaller than assumed; reduced to %d tokens, compacting)\n", a.windowTokens)
+		if cerr := a.Compact(ctx); cerr != nil {
+			return nil, lastErr
+		}
+		req.Messages = append([]serve.Message(nil), a.history...)
+	}
+	return nil, lastErr
 }
 
 // wrapToolResult marks tool output as untrusted data for the model.
