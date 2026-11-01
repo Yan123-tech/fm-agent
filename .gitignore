@@ -1,0 +1,11 @@
+# Binaries
+/fm-agent
+/bin/
+*.test
+
+# Session data
+/.fm-agent/
+*.sock
+
+# OS
+.DS_Store
