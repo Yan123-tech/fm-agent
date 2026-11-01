@@ -1,6 +1,7 @@
 package repl
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -70,7 +71,7 @@ func newTestREPL(t *testing.T, input string) (*REPL, *agent.Agent, *session.Stor
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := New(ag, store, strings.NewReader(input), out, Options{Interactive: false})
+	r := New(ag, store, bufio.NewReader(strings.NewReader(input)), out, Options{Interactive: false})
 	return r, ag, store, out
 }
 

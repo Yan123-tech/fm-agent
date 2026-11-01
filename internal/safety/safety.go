@@ -90,15 +90,16 @@ type Prompter interface {
 	Ask(question string) string
 }
 
-// IOPrompter implements Prompter over stdin/stdout.
+// IOPrompter implements Prompter over stdin/stdout. It shares its buffered
+// reader with the REPL so that input buffered while confirming is not lost.
 type IOPrompter struct {
 	In  *bufio.Reader
 	Out io.Writer
 }
 
-// NewIOPrompter builds a prompter reading from in, writing to out.
-func NewIOPrompter(in io.Reader, out io.Writer) *IOPrompter {
-	return &IOPrompter{In: bufio.NewReader(in), Out: out}
+// NewIOPrompter builds a prompter over a shared buffered reader.
+func NewIOPrompter(in *bufio.Reader, out io.Writer) *IOPrompter {
+	return &IOPrompter{In: in, Out: out}
 }
 
 // Confirm prints the description and reads y/n (default no).
