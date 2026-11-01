@@ -19,9 +19,10 @@ import (
 	"fm-agent/internal/safety"
 	"fm-agent/internal/serve"
 	"fm-agent/internal/session"
-	"fm-agent/internal/term"
 	"fm-agent/internal/tools"
 	"fm-agent/internal/tui"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
@@ -126,20 +127,18 @@ func run() int {
 	}
 
 	if interactive {
-		if restore, err := term.MakeRaw(os.Stdin); err == nil && os.Getenv("TERM") != "dumb" {
-			defer restore()
-			keys := tui.ParseKeys(os.Stdin)
-			app := tui.NewApp(ag, store, os.Stdout, keys, name)
-			ag.SetOut(app.StreamWriter())
-			ag.SetToolPrinter(app.ToolPrinter())
-			ag.SetToolEventPrinter(app.ToolEventPrinter())
-			reg.SetPrompter(app.Prompter())
-			if err := app.Run(ctx); err != nil {
-				fmt.Fprintln(os.Stderr, "fm-agent:", err)
-				return 1
-			}
-			return 0
+		m := tui.New(ag, store, name)
+		prog := tea.NewProgram(m, tea.WithAltScreen())
+		m.SetProgram(prog)
+		ag.SetOut(m.StreamWriter())
+		ag.SetToolPrinter(m.ToolPrinter())
+		ag.SetToolEventPrinter(m.ToolEventPrinter())
+		reg.SetPrompter(tui.NewPrompter(prog))
+		if _, err := prog.Run(); err != nil {
+			fmt.Fprintln(os.Stderr, "fm-agent:", err)
+			return 1
 		}
+		return 0
 	}
 
 	r := repl.New(ag, store, sharedReader(prompter), os.Stdout, repl.Options{

@@ -71,6 +71,8 @@ func (r *Registry) add(t Tool) {
 // Must be called before the registry is used concurrently.
 func (r *Registry) SetPrompter(p safety.Prompter) {
 	r.prompter = p
+	// ask_user captured the prompter at construction; rebuild it.
+	r.byName["ask_user"] = NewAskUser(p)
 }
 
 // Specs returns the tool descriptors, sorted by name for determinism.

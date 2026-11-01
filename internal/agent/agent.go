@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"fm-agent/internal/serve"
 	"fm-agent/internal/tools"
@@ -28,6 +29,8 @@ type Agent struct {
 	maxIter int
 
 	windowTokens int
+
+	mu sync.Mutex
 
 	measuredPrompt int
 
@@ -93,103 +96,157 @@ func New(srv *serve.Server, reg *tools.Registry, workspaceRoots []string, opts O
 }
 
 // Model returns the current model name.
-func (a *Agent) Model() string { return a.model }
+func (a *Agent) Model() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.model
+}
 
 // SetModel switches the model for subsequent requests.
-func (a *Agent) SetModel(m string) { a.model = m }
+func (a *Agent) SetModel(m string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.model = m
+}
 
 // SetToolPrinter swaps the per-tool-call status line printer; it takes
 // effect from the next Run.
-func (a *Agent) SetToolPrinter(fn func(string)) { a.toolPrinter = fn }
+func (a *Agent) SetToolPrinter(fn func(string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.toolPrinter = fn
+}
 
 // SetToolEventPrinter swaps the after-tool result printer; it takes effect
 // from the next Run.
 func (a *Agent) SetToolEventPrinter(fn func(name, result string)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.toolEventPrinter = fn
 }
 
 // SetOut swaps the streaming output writer; takes effect from the next
 // model call.
-func (a *Agent) SetOut(w io.Writer) { a.out = w }
+func (a *Agent) SetOut(w io.Writer) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.out = w
+}
 
 // History returns a copy of the conversation transcript including the
 // system message.
 func (a *Agent) History() []serve.Message {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return append([]serve.Message(nil), a.history...)
 }
 
 // SetHistory replaces the transcript after the system message.
 func (a *Agent) SetHistory(msgs []serve.Message) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	sys := a.history[0]
 	a.history = append([]serve.Message{sys}, msgs...)
 }
 
 // LastUsage returns token accounting from the most recent model call.
-func (a *Agent) LastUsage() *serve.Usage { return a.lastUsage }
+func (a *Agent) LastUsage() *serve.Usage {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastUsage
+}
 
 // Clear drops all history except the system message.
 func (a *Agent) Clear() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.history = a.history[:1]
 }
 
 // compactThreshold is the fill level (75%) at which old history is
 // compacted before the next model call.
-func (a *Agent) compactThreshold() int { return a.windowTokens * 3 / 4 }
+func (a *Agent) compactThreshold() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.windowTokens * 3 / 4
+}
 
 // Run processes one user message: it loops calling the model and executing
 // requested tool calls until the model answers with plain text.
 func (a *Agent) Run(ctx context.Context, userText string) error {
+	a.mu.Lock()
 	a.history = append(a.history, serve.Message{Role: "user", Content: userText})
+	a.mu.Unlock()
 
 	for iter := 0; iter < a.maxIter; iter++ {
-		if a.EstimateTokens() >= a.compactThreshold() && len(a.history) > compactionKeep+1 {
+		a.mu.Lock()
+		estimate := a.estimateTokens()
+		histLen := len(a.history)
+		a.mu.Unlock()
+		if estimate >= a.compactThreshold() && histLen > compactionKeep+1 {
 			if err := a.Compact(ctx); err != nil {
-				fmt.Fprintf(a.out, "(auto-compaction failed: %v)\n", err)
+				a.mu.Lock()
+				out := a.out
+				a.mu.Unlock()
+				fmt.Fprintf(out, "(auto-compaction failed: %v)\n", err)
 			}
 		}
+		a.mu.Lock()
 		req := &serve.ChatRequest{
 			Model:    a.model,
 			Messages: append([]serve.Message(nil), a.history...),
 			Tools:    a.reg.Specs(),
 		}
+		a.mu.Unlock()
 		// On context overflow, shrink the assumed window, compact and retry
 		// the same step before giving up (handles 4096-token devices).
 		resp, err := a.withOverflowRetry(ctx, req)
 		if err != nil {
 			return err
 		}
+		a.mu.Lock()
 		a.lastUsage = resp.Usage
 		if resp.Usage != nil && resp.Usage.PromptTokens > a.measuredPrompt {
 			a.measuredPrompt = resp.Usage.PromptTokens
 		}
+		a.mu.Unlock()
 		msg := resp.Message
 		msg.Role = "assistant"
 
+		a.mu.Lock()
 		if len(msg.ToolCalls) == 0 {
 			a.history = append(a.history, msg)
+			a.mu.Unlock()
 			return nil
 		}
-
 		a.history = append(a.history, msg)
-		fmt.Fprintln(a.out)
+		a.mu.Unlock()
+
+		a.mu.Lock()
+		out := a.out
+		toolPrinter, eventPrinter := a.toolPrinter, a.toolEventPrinter
+		a.mu.Unlock()
+		fmt.Fprintln(out)
 		for _, tc := range msg.ToolCalls {
-			if a.toolPrinter != nil {
-				a.toolPrinter(tc.Function.Name)
+			if toolPrinter != nil {
+				toolPrinter(tc.Function.Name)
 			} else {
-				fmt.Fprintf(a.out, "  ⚒ %s\n", tc.Function.Name)
+				fmt.Fprintf(out, "  ⚒ %s\n", tc.Function.Name)
 			}
 			result, _, err := a.reg.Run(ctx, tc)
 			if err != nil {
 				result = "Error: " + err.Error()
 			}
-			if a.toolEventPrinter != nil {
-				a.toolEventPrinter(tc.Function.Name, result)
+			if eventPrinter != nil {
+				eventPrinter(tc.Function.Name, result)
 			}
+			a.mu.Lock()
 			a.history = append(a.history, serve.Message{
 				Role:       "tool",
 				ToolCallID: tc.ID,
 				Content:    wrapToolResult(tc.Function.Name, result),
 			})
+			a.mu.Unlock()
 		}
 	}
 	return ErrMaxIterations
@@ -201,23 +258,34 @@ func (a *Agent) Run(ctx context.Context, userText string) error {
 func (a *Agent) withOverflowRetry(ctx context.Context, req *serve.ChatRequest) (*serve.ChatResponse, error) {
 	var lastErr error
 	for shrink := 0; shrink < 4; shrink++ {
+		a.mu.Lock()
+		out := a.out
+		a.mu.Unlock()
 		resp, err := a.srv.ChatStream(ctx, req, func(d string) {
-			fmt.Fprint(a.out, d)
+			fmt.Fprint(out, d)
 		})
 		if err == nil {
 			return resp, nil
 		}
 		var apiErr *serve.APIError
-		if !errors.As(err, &apiErr) || apiErr.Code != "context_length_exceeded" || a.windowTokens <= MinWindowTokens {
+		a.mu.Lock()
+		atFloor := a.windowTokens <= MinWindowTokens
+		a.mu.Unlock()
+		if !errors.As(err, &apiErr) || apiErr.Code != "context_length_exceeded" || atFloor {
 			return nil, err
 		}
 		lastErr = err
+		a.mu.Lock()
 		a.windowTokens = max(a.windowTokens/2, MinWindowTokens)
-		fmt.Fprintf(a.out, "\n(context window is smaller than assumed; reduced to %d tokens, compacting)\n", a.windowTokens)
+		window := a.windowTokens
+		a.mu.Unlock()
+		fmt.Fprintf(out, "\n(context window is smaller than assumed; reduced to %d tokens, compacting)\n", window)
 		if cerr := a.Compact(ctx); cerr != nil {
 			return nil, lastErr
 		}
+		a.mu.Lock()
 		req.Messages = append([]serve.Message(nil), a.history...)
+		a.mu.Unlock()
 	}
 	return nil, lastErr
 }

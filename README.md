@@ -52,17 +52,26 @@ for confirmation unless `--yes` is given.
 
 ## Interface
 
-In a terminal you get a full-screen, Claude Code style interface (standard
-library only — raw mode via ioctl, no external TUI dependencies):
+In a terminal you get a full-screen, Claude Code style interface built on
+the [Charm](https://charm.sh) stack — the same component set used by Crush,
+ccx-go and other terminal agents:
 
-- real-time streaming of the model's answer with markdown rendering
-- scrollback with PgUp/PgDn, multiline input (alt+enter), input history (↑/↓)
-- y/n answers tool confirmations with a single keypress; Esc interrupts
-  the model or declines; Ctrl+C quits
+- [bubbletea](https://github.com/charmbracelet/bubbletea) event loop with
+  cell-diffed rendering (no flicker)
+- [bubbles](https://github.com/charmbracelet/bubbles) viewport (PgUp/PgDn
+  scrollback) and textarea (multiline input via alt+enter / shift+enter /
+  ctrl+j, history via ↑/↓)
+- [lipgloss](https://github.com/charmbracelet/lipgloss) styling and
+  [glamour](https://github.com/charmbracelet/glamour) markdown rendering
+  with syntax highlighting
+- real-time streaming of the model's answer, styled tool-call blocks
+  (● running / ✓ done / ✗ error)
+- y/n answers tool confirmations with a single keypress (the action is
+  shown in the status bar); Esc interrupts the model; Ctrl+C quits
 - status bar with model, estimated context usage, and session
 
 Flags: `--plain` forces the line-based interface (also used automatically
-when stdin is piped or the terminal lacks raw-mode support).
+when stdin is piped).
 
 ### Commands inside the REPL
 
@@ -81,13 +90,12 @@ Sessions autosave to `~/.fm-agent/sessions/<name>.jsonl`.
 
 ```
 cmd/fm-agent      entry point: flags, env checks, fullscreen TUI / plain REPL
-internal/term     raw-mode terminal control (stdlib ioctl/termios)
 internal/serve    fm serve child process + Chat Completions client (UDS, SSE)
 internal/agent    tool-call loop, untrusted-result marking, compaction
 internal/tools    read_file, write_file, edit_file, list_files, search,
                   run_command, ask_user
 internal/safety   workspace confinement, confirmation prompter
-internal/tui      fullscreen UI: key parsing, ANSI wrap, markdown streaming
+internal/tui      fullscreen UI (bubbletea/bubbles/lipgloss/glamour)
 internal/repl     line-based fallback REPL, shared slash commands
 internal/session  JSONL transcript persistence
 ```
