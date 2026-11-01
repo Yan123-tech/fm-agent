@@ -217,10 +217,16 @@ func TestModelAskUserFlow(t *testing.T) {
 	e := newEnv(t, tool, `{"role":"assistant","content":"thanks"}`)
 	e.typeText("go")
 	e.enter()
-	e.waitFor(t, 5*time.Second, func(s snapshot) bool { return s.ask }, "ask request")
+	s := e.waitFor(t, 5*time.Second, func(s snapshot) bool { return s.ask }, "ask request")
+	if !strings.Contains(s.view, "which name?") {
+		t.Errorf("question not visible in view:\n%s", s.view)
+	}
 	e.typeText("myname")
 	e.enter()
-	s := e.waitFor(t, 5*time.Second, func(s snapshot) bool { return !s.running }, "run finished")
+	s = e.waitFor(t, 5*time.Second, func(s snapshot) bool { return !s.running }, "run finished")
+	if strings.Contains(s.view, "which name?") {
+		t.Errorf("question bar must disappear after answering:\n%s", s.view)
+	}
 	found := false
 	for _, b := range s.blocks {
 		if b.kind == blockUser && strings.Contains(b.rendered, "myname") {

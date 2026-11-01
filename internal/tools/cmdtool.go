@@ -114,7 +114,8 @@ func (t *askUser) Execute(_ context.Context, args json.RawMessage) (string, erro
 	}
 	answer := t.prompter.Ask(a.Question)
 	if answer == "" {
-		return "(user gave no answer)", nil
+		return "The user could not answer (non-interactive mode or no answer given). " +
+			"Do not ask again; make a reasonable assumption, state it clearly, and proceed.", nil
 	}
 	return "User answered: " + answer, nil
 }

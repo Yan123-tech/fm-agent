@@ -224,6 +224,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case askMsg:
 		m.ask = &msg
+		m.layout()
 		return m, nil
 
 	case runDoneMsg:
@@ -342,6 +343,7 @@ func (m *Model) submit() {
 	if m.ask != nil {
 		m.ask.resp <- text
 		m.ask = nil
+		m.layout()
 		m.refreshContent()
 		return
 	}
@@ -392,10 +394,13 @@ func (m *Model) layout() {
 	}
 	m.ta.SetWidth(m.width - 2)
 	m.ta.SetHeight(inputH)
-	// Rows: viewport body + divider + input + status bar must equal the
-	// window height exactly; one row too many makes the terminal scroll
-	// every frame and the renderer desyncs.
+	// Rows: viewport body + divider + input + optional ask bar + status bar
+	// must equal the window height exactly; one row too many makes the
+	// terminal scroll every frame and the renderer desyncs.
 	bodyH := m.height - inputH - 2
+	if m.ask != nil {
+		bodyH--
+	}
 	if bodyH < 1 {
 		bodyH = 1
 	}
@@ -512,6 +517,12 @@ func (m *Model) viewLocked() string {
 	sb.WriteString(styleDim.Render(strings.Repeat("─", m.width)))
 	sb.WriteString("\n")
 	sb.WriteString(m.ta.View())
+	if m.ask != nil {
+		question := lipgloss.NewStyle().MaxWidth(max(m.width-14, 20)).Render(m.ask.question)
+		sb.WriteString("\n")
+		sb.WriteString(styleWarn.Render("❓ "+question) +
+			styleDim.Render(" — type the answer above, Enter to send"))
+	}
 	sb.WriteString("\n")
 	sb.WriteString(m.statusLine())
 	return sb.String()
