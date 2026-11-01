@@ -17,6 +17,11 @@ type stubPrompter struct{ confirm bool }
 func (s stubPrompter) Confirm(string) bool { return s.confirm }
 func (s stubPrompter) Ask(q string) string { return "answer to: " + q }
 
+type silentPrompter struct{}
+
+func (silentPrompter) Confirm(string) bool { return true }
+func (silentPrompter) Ask(string) string   { return "" }
+
 func setup(t *testing.T) (*Registry, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -194,6 +199,16 @@ func TestUnknownTool(t *testing.T) {
 	_, _, err := reg.Run(context.Background(), call("nope", map[string]any{}))
 	if err == nil {
 		t.Error("expected error for unknown tool")
+	}
+}
+
+func TestAskUserUnavailableMessage(t *testing.T) {
+	dir := t.TempDir()
+	ws, _ := safety.NewWorkspace(dir)
+	reg := NewRegistry(ws, silentPrompter{})
+	res, _, _ := reg.Run(context.Background(), call("ask_user", map[string]any{"question": "which?"}))
+	if !strings.Contains(res, "make a reasonable assumption") {
+		t.Errorf("expected guidance for unavailable user, got: %s", res)
 	}
 }
 
