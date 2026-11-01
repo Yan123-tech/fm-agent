@@ -41,7 +41,7 @@ func raw(t *testing.T, v any) json.RawMessage {
 	return b
 }
 
-func TestReadFileNumberedAndTruncated(t *testing.T) {
+func TestReadFileVerbatimAndTruncated(t *testing.T) {
 	reg, dir := setup(t)
 	var lines []string
 	for i := 1; i <= 500; i++ {
@@ -54,12 +54,21 @@ func TestReadFileNumberedAndTruncated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resLines := strings.Split(strings.TrimSuffix(res, "\n"), "\n")
-	if !strings.Contains(resLines[0], "showing lines 1-200 of 500") {
+	resLines := strings.Split(res, "\n")
+	if !strings.Contains(resLines[0], "[lines 1-200 of 500]") {
 		t.Errorf("missing truncation notice: %q", resLines[0])
 	}
 	if got := len(resLines) - 1; got != MaxReadLines {
 		t.Errorf("returned %d lines, want %d", got, MaxReadLines)
+	}
+	// Content must be verbatim: no line-number gutter.
+	for _, l := range resLines[1 : 1+10] {
+		if strings.HasPrefix(l, " ") || strings.HasPrefix(l, "\t") {
+			t.Errorf("line has gutter: %q", l)
+		}
+		if l != strings.Repeat("x", 10) {
+			t.Errorf("line not verbatim: %q", l)
+		}
 	}
 }
 
@@ -128,6 +137,67 @@ func TestEditFileUniqueness(t *testing.T) {
 	}))
 	if !strings.Contains(res, "not found") {
 		t.Errorf("expected not-found error, got: %s", res)
+	}
+}
+
+func TestEditFileStripsCopiedLineNumbers(t *testing.T) {
+	reg, dir := setup(t)
+	content := "def add(a, b):\n    return a + b\n"
+	if err := os.WriteFile(filepath.Join(dir, "util.py"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The model pasted read_file's numbered gutter into old/new strings.
+	res, _, _ := reg.Run(context.Background(), call("edit_file", map[string]any{
+		"path":       "util.py",
+		"old_string": "     1\tdef add(a, b):\n     2\t    return a + b\n",
+		"new_string": "     1\tdef add(a, b):\n     2\t    return a + b\n     3\t\n     4\tdef subtract(a, b):\n     5\t    return a - b\n",
+	}))
+	if !strings.Contains(res, "Edited") {
+		t.Fatalf("expected success after gutter strip, got: %s", res)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "util.py"))
+	want := "def add(a, b):\n    return a + b\n\ndef subtract(a, b):\n    return a - b\n"
+	if string(data) != want {
+		t.Errorf("content = %q", data)
+	}
+}
+
+func TestWriteFileStripsCopiedLineNumbers(t *testing.T) {
+	reg, dir := setup(t)
+	res, _, _ := reg.Run(context.Background(), call("write_file", map[string]any{
+		"path":    "out.py",
+		"content": "     1\tdef f():\n     2\t    pass\n",
+	}))
+	if !strings.Contains(res, "Wrote") {
+		t.Fatalf("expected success, got: %s", res)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "out.py"))
+	if string(data) != "def f():\n    pass\n" {
+		t.Errorf("content = %q", data)
+	}
+}
+
+func TestEditFileToleratesStaleTrailingNewlines(t *testing.T) {
+	reg, dir := setup(t)
+	content := "def add(a, b):\n    return a + b\n"
+	if err := os.WriteFile(filepath.Join(dir, "util.py"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The model appended phantom blank lines after the numbered gutter.
+	res, _, _ := reg.Run(context.Background(), call("edit_file", map[string]any{
+		"path":       "util.py",
+		"old_string": "     1\tdef add(a, b):\n     2\t    return a + b\n     3\t\n\n",
+		"new_string": "     1\tdef add(a, b):\n     2\t    return a + b\n     3\t\n     4\tdef subtract(a, b):\n     5\t    return a - b\n",
+	}))
+	if !strings.Contains(res, "Edited") {
+		t.Fatalf("expected success, got: %s", res)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "util.py"))
+	if !strings.Contains(string(data), "def subtract(a, b):") {
+		t.Errorf("subtract missing:\n%s", data)
+	}
+	if !strings.Contains(string(data), "def add(a, b):") {
+		t.Errorf("add was lost:\n%s", data)
 	}
 }
 

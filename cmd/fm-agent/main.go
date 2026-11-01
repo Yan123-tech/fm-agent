@@ -34,13 +34,15 @@ func main() {
 
 func run() int {
 	var (
-		model      = flag.String("model", "system", "model to use (system, pcc)")
-		yes        = flag.Bool("yes", false, "auto-approve write/edit/run actions")
-		resume     = flag.String("resume", "", "resume a saved session by name")
-		sessionFlg = flag.String("session", "", "session name for autosave (default: value of -resume or \"default\")")
-		allowPaths multiFlag
-		window     = flag.Int("window", agent.DefaultWindowTokens, "assumed context window in tokens (auto-shrinks on overflow)")
-		plain      = flag.Bool("plain", false, "use the plain line-based interface instead of the TUI")
+		model       = flag.String("model", "system", "model to use (system, pcc)")
+		yes         = flag.Bool("yes", false, "auto-approve write/edit/run actions")
+		resume      = flag.String("resume", "", "resume a saved session by name")
+		sessionFlg  = flag.String("session", "", "session name for autosave (default: value of -resume or \"default\")")
+		allowPaths  multiFlag
+		window      = flag.Int("window", agent.DefaultWindowTokens, "assumed context window in tokens (auto-shrinks on overflow)")
+		temperature = flag.Float64("temperature", 0, "sampling temperature; 0 = greedy (most reliable for code and tool calls)")
+		maxTokens   = flag.Int("max-tokens", agent.DefaultMaxTokens, "cap on each model reply, in tokens")
+		plain       = flag.Bool("plain", false, "use the plain line-based interface instead of the TUI")
 	)
 	flag.Var(&allowPaths, "allow-path", "additional allowed directory (repeatable)")
 	flag.Parse()
@@ -86,20 +88,20 @@ func run() int {
 	interactive := isTerminal(os.Stdin) && !*plain
 
 	reg := tools.NewRegistry(ws, prompter)
+	baseOpts := agent.Options{
+		Model:        *model,
+		WindowTokens: *window,
+		Temperature:  *temperature,
+		MaxTokens:    *maxTokens,
+	}
 	var opts agent.Options
 	if interactive {
 		// The TUI renders the final answer itself; streaming goes nowhere.
-		opts = agent.Options{
-			Model:        *model,
-			Out:          io.Discard,
-			WindowTokens: *window,
-		}
+		opts = baseOpts
+		opts.Out = io.Discard
 	} else {
-		opts = agent.Options{
-			Model:        *model,
-			Out:          os.Stdout,
-			WindowTokens: *window,
-		}
+		opts = baseOpts
+		opts.Out = os.Stdout
 	}
 	ag := agent.New(srv, reg, ws.Roots(), opts)
 

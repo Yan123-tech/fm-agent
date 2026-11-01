@@ -39,6 +39,11 @@ type ChatRequest struct {
 	Messages []Message `json:"messages"`
 	Tools    []Tool    `json:"tools,omitempty"`
 	Stream   bool      `json:"stream,omitempty"`
+	// Temperature below ~0.05 selects greedy decoding — markedly more
+	// reliable for tool arguments and code.
+	Temperature *float64 `json:"temperature,omitempty"`
+	// MaxCompletionTokens caps generation; the server ignores max_tokens.
+	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
 }
 
 // ChatResponse is the assembled model reply.

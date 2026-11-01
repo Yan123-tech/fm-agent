@@ -15,6 +15,23 @@ import (
 	"fm-agent/internal/serve"
 )
 
+// stripCopiedGutter removes read_file line-number prefixes that models
+// sometimes copy verbatim into edit/write arguments. Any line that starts
+// with optional spaces, 1–6 digits and a tab is treated as a copied gutter;
+// real file lines essentially never start with digits followed by a tab.
+func stripCopiedGutter(s string) string {
+	if !strings.Contains(s, "\t") {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = gutterRe.ReplaceAllString(l, "")
+	}
+	return strings.Join(lines, "\n")
+}
+
+var gutterRe = regexp.MustCompile(`^[ \t]*\d{1,6}\t`)
+
 // --- read_file ---
 
 type readFile struct {
@@ -26,7 +43,9 @@ func NewReadFile(ws *safety.Workspace) Tool { return &readFile{ws} }
 
 func (t *readFile) Spec() serve.Tool {
 	return spec("read_file",
-		"Read a text file. Lines are numbered. Use offset/limit for large files; at most "+strconv.Itoa(MaxReadLines)+" lines are returned.",
+		"Read a text file and return its EXACT content — copy it verbatim into edit_file "+
+			"arguments later. Use offset/limit for large files; at most "+strconv.Itoa(MaxReadLines)+
+			" lines are returned with a [lines X-Y of N] header.",
 		map[string]any{
 			"path":   strProp("File path relative to the workspace"),
 			"offset": intProp("1-based first line to read"),
@@ -73,17 +92,18 @@ func (t *readFile) Execute(_ context.Context, args json.RawMessage) (string, err
 	if a.Limit > 0 && a.Limit < limit {
 		limit = a.Limit
 	}
+	end := start - 1 + limit
+	if end > len(lines) {
+		end = len(lines)
+	}
 	var b strings.Builder
-	n := 0
-	for i := start - 1; i < len(lines) && n < limit; i++ {
-		fmt.Fprintf(&b, "%6d\t%s\n", i+1, lines[i])
-		n++
-	}
 	truncated := ""
-	if start > 1 || start-1+n < len(lines) {
-		truncated = fmt.Sprintf("[showing lines %d-%d of %d]\n", start, start-1+n, len(lines))
+	if start > 1 || end < len(lines) {
+		truncated = fmt.Sprintf("[lines %d-%d of %d]\n", start, end, len(lines))
 	}
-	return truncated + b.String(), nil
+	b.WriteString(truncated)
+	b.WriteString(strings.Join(lines[start-1:end], "\n"))
+	return b.String(), nil
 }
 
 func isBinary(data []byte) bool {
@@ -105,10 +125,11 @@ func NewWriteFile(ws *safety.Workspace) Tool { return &writeFile{ws} }
 
 func (t *writeFile) Spec() serve.Tool {
 	return spec("write_file",
-		"Create or fully overwrite a file with the given content.",
+		"Create a NEW file. To change an existing file use edit_file instead — never overwrite "+
+			"whole files. content must be exact file text, never line numbers from tool output.",
 		map[string]any{
 			"path":    strProp("File path relative to the workspace"),
-			"content": strProp("Full new file content"),
+			"content": strProp("Full new file content, verbatim"),
 		}, nil)
 }
 
@@ -148,13 +169,14 @@ func (t *writeFile) Execute(_ context.Context, args json.RawMessage) (string, er
 	if err != nil {
 		return "", err
 	}
+	content := stripCopiedGutter(a.Content)
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(abs, []byte(a.Content), 0o644); err != nil {
+	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Wrote %s (%d bytes)", a.Path, len(a.Content)), nil
+	return fmt.Sprintf("Wrote %s (%d bytes)", a.Path, len(content)), nil
 }
 
 // --- edit_file ---
@@ -168,10 +190,12 @@ func NewEditFile(ws *safety.Workspace) Tool { return &editFile{ws} }
 
 func (t *editFile) Spec() serve.Tool {
 	return spec("edit_file",
-		"Replace exactly one occurrence of old_string with new_string in a file. old_string must be unique and match verbatim.",
+		"Replace exactly one occurrence of old_string with new_string in a file. old_string must be "+
+			"the EXACT file content — never the line numbers shown by read_file — and must appear "+
+			"exactly once; include enough surrounding lines to make it unique.",
 		map[string]any{
 			"path":       strProp("File path relative to the workspace"),
-			"old_string": strProp("Exact text to replace (must appear exactly once)"),
+			"old_string": strProp("Exact current file text (no line numbers, match indentation verbatim)"),
 			"new_string": strProp("Replacement text"),
 		}, nil)
 }
@@ -195,6 +219,10 @@ func (t *editFile) Execute(_ context.Context, args json.RawMessage) (string, err
 	if err := decodeArgs(args, &a); err != nil {
 		return "", err
 	}
+	// Models sometimes paste read_file's line-number gutter verbatim;
+	// strip it when it clearly came from tool output.
+	a.OldString = stripCopiedGutter(a.OldString)
+	a.NewString = stripCopiedGutter(a.NewString)
 	abs, err := t.ws.Resolve(a.Path)
 	if err != nil {
 		return "", err
@@ -204,19 +232,75 @@ func (t *editFile) Execute(_ context.Context, args json.RawMessage) (string, err
 		return "", err
 	}
 	content := string(data)
-	count := strings.Count(content, a.OldString)
+	// Exact match first; then tolerate display-gutter pollution (line
+	// numbers in various shapes copied from read_file output).
+	old, count := a.OldString, strings.Count(content, a.OldString)
+	updated := ""
 	switch {
+	case count == 1:
+		updated = strings.Replace(content, old, a.NewString, 1)
 	case count == 0:
-		return "", fmt.Errorf("old_string not found in %s", a.Path)
-	case count > 1:
+		var ok bool
+		updated, count, ok = fuzzyReplace(content, a.OldString, a.NewString)
+		if !ok {
+			return "", fmt.Errorf("old_string not found in %s", a.Path)
+		}
+	default:
 		return "", fmt.Errorf("old_string appears %d times in %s; provide more context to make it unique", count, a.Path)
 	}
-	updated := strings.Replace(content, a.OldString, a.NewString, 1)
 	if err := os.WriteFile(abs, []byte(updated), 0o644); err != nil {
 		return "", err
 	}
 	oldLines := strings.Count(a.OldString, "\n") + 1
 	return fmt.Sprintf("Edited %s: replaced %d line(s)", a.Path, oldLines), nil
+}
+
+// gutterNorm strips a copied line-number gutter from one line: optional
+// spaces, 1-6 digits, then a tab or 2+ spaces. Real code lines essentially
+// never start this way.
+var gutterNorm = regexp.MustCompile(`^[ \t]*\d{1,6}(?:\t| {2,})`)
+
+func normGutterLines(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = gutterNorm.ReplaceAllString(l, "")
+	}
+	return out
+}
+
+// fuzzyReplace finds old in content ignoring gutter pollution on either
+// side, and replaces the matched window with new (also gutter-stripped).
+// It reports how many windows matched; exactly one is required by callers.
+func fuzzyReplace(content, old, new string) (string, int, bool) {
+	oldLines := strings.Split(strings.TrimRight(old, "\n"), "\n")
+	newLines := strings.Split(strings.TrimRight(new, "\n"), "\n")
+	contentLines := strings.Split(content, "\n")
+	nOld := normGutterLines(oldLines)
+	nNew := normGutterLines(newLines)
+	nContent := normGutterLines(contentLines)
+
+	var matches []int
+	for i := 0; i+len(nOld) <= len(nContent); i++ {
+		ok := true
+		for j := range nOld {
+			if nContent[i+j] != nOld[j] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			matches = append(matches, i)
+		}
+	}
+	if len(matches) != 1 {
+		return content, len(matches), false
+	}
+	i := matches[0]
+	out := make([]string, 0, len(contentLines)-len(oldLines)+len(newLines))
+	out = append(out, contentLines[:i]...)
+	out = append(out, nNew...)
+	out = append(out, contentLines[i+len(oldLines):]...)
+	return strings.Join(out, "\n"), 1, true
 }
 
 // --- list_files ---

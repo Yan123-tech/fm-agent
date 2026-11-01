@@ -199,16 +199,29 @@ func TestRunExecutesToolCallsThenAnswers(t *testing.T) {
 }
 
 func TestRunStopsAtMaxIterations(t *testing.T) {
-	toolResp := `{"role":"assistant","tool_calls":[{"id":"c","type":"function","function":{"name":"list_files","arguments":"{\"pattern\":\"*\"}"}}]}`
-	// Three identical tool responses: the loop must stop at maxIter even
-	// though the model never produces a final answer.
-	srv, _ := newScriptedServer(t, toolResp, toolResp, toolResp)
+	toolA := `{"role":"assistant","tool_calls":[{"id":"c","type":"function","function":{"name":"list_files","arguments":"{\"pattern\":\"a\"}"}}]}`
+	toolB := `{"role":"assistant","tool_calls":[{"id":"c","type":"function","function":{"name":"list_files","arguments":"{\"pattern\":\"b\"}"}}]}`
+	// Alternating different calls: the loop must stop at maxIter even though
+	// the model never produces a final answer.
+	srv, _ := newScriptedServer(t, toolA, toolB, toolA, toolB, toolA)
 	var out bytes.Buffer
 	a, _ := newTestAgent(t, srv, &out)
 	a.maxIter = 3
 
 	err := a.Run(context.Background(), "loop forever")
 	if err != ErrMaxIterations {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRunStopsOnRepeatedToolCall(t *testing.T) {
+	tool := `{"role":"assistant","tool_calls":[{"id":"c","type":"function","function":{"name":"list_files","arguments":"{\"pattern\":\"*\"}"}}]}`
+	srv, _ := newScriptedServer(t, tool, tool, tool)
+	var out bytes.Buffer
+	a, _ := newTestAgent(t, srv, &out)
+
+	err := a.Run(context.Background(), "loop forever")
+	if err != ErrRepeatedToolCall {
 		t.Fatalf("err = %v", err)
 	}
 }
