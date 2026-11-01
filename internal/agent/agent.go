@@ -31,7 +31,8 @@ type Agent struct {
 
 	measuredPrompt int
 
-	toolPrinter func(name string)
+	toolPrinter      func(name string)
+	toolEventPrinter func(name, result string)
 
 	history   []serve.Message
 	lastUsage *serve.Usage
@@ -53,6 +54,9 @@ type Options struct {
 	// ToolPrinter overrides the per-tool-call status line; nil prints the
 	// default "  ⚒ name" line to Out.
 	ToolPrinter func(name string)
+	// ToolEventPrinter, when set, is called after each tool call finishes
+	// with its result text; UIs use it to show ✓/✗ tool blocks.
+	ToolEventPrinter func(name, result string)
 }
 
 // New builds an Agent. workspaceRoots is only used to render the system
@@ -75,13 +79,14 @@ func New(srv *serve.Server, reg *tools.Registry, workspaceRoots []string, opts O
 		prompt = DefaultSystemPrompt(workspaceRoots, reg)
 	}
 	a := &Agent{
-		srv:          srv,
-		reg:          reg,
-		model:        opts.Model,
-		out:          opts.Out,
-		maxIter:      opts.MaxIterations,
-		windowTokens: opts.WindowTokens,
-		toolPrinter:  opts.ToolPrinter,
+		srv:              srv,
+		reg:              reg,
+		model:            opts.Model,
+		out:              opts.Out,
+		maxIter:          opts.MaxIterations,
+		windowTokens:     opts.WindowTokens,
+		toolPrinter:      opts.ToolPrinter,
+		toolEventPrinter: opts.ToolEventPrinter,
 	}
 	a.history = append(a.history, serve.Message{Role: "system", Content: prompt})
 	return a
@@ -96,6 +101,16 @@ func (a *Agent) SetModel(m string) { a.model = m }
 // SetToolPrinter swaps the per-tool-call status line printer; it takes
 // effect from the next Run.
 func (a *Agent) SetToolPrinter(fn func(string)) { a.toolPrinter = fn }
+
+// SetToolEventPrinter swaps the after-tool result printer; it takes effect
+// from the next Run.
+func (a *Agent) SetToolEventPrinter(fn func(name, result string)) {
+	a.toolEventPrinter = fn
+}
+
+// SetOut swaps the streaming output writer; takes effect from the next
+// model call.
+func (a *Agent) SetOut(w io.Writer) { a.out = w }
 
 // History returns a copy of the conversation transcript including the
 // system message.
@@ -158,14 +173,17 @@ func (a *Agent) Run(ctx context.Context, userText string) error {
 		a.history = append(a.history, msg)
 		fmt.Fprintln(a.out)
 		for _, tc := range msg.ToolCalls {
-			result, _, err := a.reg.Run(ctx, tc)
-			if err != nil {
-				result = "Error: " + err.Error()
-			}
 			if a.toolPrinter != nil {
 				a.toolPrinter(tc.Function.Name)
 			} else {
 				fmt.Fprintf(a.out, "  ⚒ %s\n", tc.Function.Name)
+			}
+			result, _, err := a.reg.Run(ctx, tc)
+			if err != nil {
+				result = "Error: " + err.Error()
+			}
+			if a.toolEventPrinter != nil {
+				a.toolEventPrinter(tc.Function.Name, result)
 			}
 			a.history = append(a.history, serve.Message{
 				Role:       "tool",

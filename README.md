@@ -52,11 +52,17 @@ for confirmation unless `--yes` is given.
 
 ## Interface
 
-In a terminal you get the chat-style TUI: a thinking spinner, markdown
-rendering (bold, inline code, fenced blocks, headers), styled tool-call
-lines, and a status bar with the estimated context usage. Flags: `--plain`
-forces the old line-based interface (also used automatically when stdin is
-piped).
+In a terminal you get a full-screen, Claude Code style interface (standard
+library only — raw mode via ioctl, no external TUI dependencies):
+
+- real-time streaming of the model's answer with markdown rendering
+- scrollback with PgUp/PgDn, multiline input (alt+enter), input history (↑/↓)
+- y/n answers tool confirmations with a single keypress; Esc interrupts
+  the model or declines; Ctrl+C quits
+- status bar with model, estimated context usage, and session
+
+Flags: `--plain` forces the line-based interface (also used automatically
+when stdin is piped or the terminal lacks raw-mode support).
 
 ### Commands inside the REPL
 
@@ -74,13 +80,15 @@ Sessions autosave to `~/.fm-agent/sessions/<name>.jsonl`.
 ## Architecture
 
 ```
-cmd/fm-agent      entry point: flags, env checks, wiring
+cmd/fm-agent      entry point: flags, env checks, fullscreen TUI / plain REPL
+internal/term     raw-mode terminal control (stdlib ioctl/termios)
 internal/serve    fm serve child process + Chat Completions client (UDS, SSE)
 internal/agent    tool-call loop, untrusted-result marking, compaction
 internal/tools    read_file, write_file, edit_file, list_files, search,
                   run_command, ask_user
 internal/safety   workspace confinement, confirmation prompter
-internal/repl     prompt loop, slash commands
+internal/tui      fullscreen UI: key parsing, ANSI wrap, markdown streaming
+internal/repl     line-based fallback REPL, shared slash commands
 internal/session  JSONL transcript persistence
 ```
 

@@ -1,7 +1,6 @@
-// Package tui implements the chat-style terminal interface: ANSI colors,
-// a waiting spinner, markdown-lite rendering and a per-turn status bar.
-// It uses no external dependencies; plain line discipline, terminal
-// scrollback handles history.
+// Package tui implements the full-screen terminal interface: raw-mode
+// alternate screen, real-time streaming, multiline input, scrollback and
+// keypress confirmations — Claude Code style. Standard library only.
 package tui
 
 import (
@@ -10,42 +9,66 @@ import (
 
 // ANSI SGR fragments used across the UI.
 const (
-	ansiReset  = "\x1b[0m"
-	ansiBold   = "\x1b[1m"
-	ansiDim    = "\x1b[2m"
-	ansiItalic = "\x1b[3m"
-	ansiRed    = "\x1b[31m"
-	ansiGreen  = "\x1b[32m"
-	ansiYellow = "\x1b[33m"
-	ansiCyan   = "\x1b[36m"
-	ansiGray   = "\x1b[90m"
+	ansiReset    = "\x1b[0m"
+	ansiBold     = "\x1b[1m"
+	ansiDim      = "\x1b[2m"
+	ansiItalic   = "\x1b[3m"
+	ansiRed      = "\x1b[31m"
+	ansiGreen    = "\x1b[32m"
+	ansiYellow   = "\x1b[33m"
+	ansiCyan     = "\x1b[36m"
+	ansiGray     = "\x1b[90m"
+	ansiClear    = "\x1b[2J\x1b[H"
+	ansiEraseEOW = "\x1b[J" // erase from cursor to end of screen
 )
+
+// mdStream renders markdown incrementally, line by line, so streaming
+// output can be displayed as it arrives.
+type mdStream struct {
+	inFence bool
+}
+
+// feedLine renders one complete line and updates fence state. It returns
+// "" for fence delimiter lines (```).
+func (m *mdStream) feedLine(line string) string {
+	trimmed := strings.TrimSpace(line)
+	switch {
+	case strings.HasPrefix(trimmed, "```"):
+		m.inFence = !m.inFence
+		return ""
+	case m.inFence:
+		return ansiGray + "  │ " + line + ansiReset
+	case strings.HasPrefix(line, "### "):
+		return ansiBold + ansiCyan + line[4:] + ansiReset
+	case strings.HasPrefix(line, "## "):
+		return ansiBold + ansiCyan + line[3:] + ansiReset
+	case strings.HasPrefix(line, "# "):
+		return ansiBold + ansiCyan + line[2:] + ansiReset
+	default:
+		return renderInline(line)
+	}
+}
+
+// partial renders the not-yet-complete tail line.
+func (m *mdStream) partial(line string) string {
+	if line == "" {
+		return ""
+	}
+	if m.inFence {
+		return ansiGray + "  │ " + line + ansiReset
+	}
+	return renderInline(line)
+}
 
 // RenderMarkdown converts a markdown-lite subset to styled terminal text:
 // fenced code blocks, headers, bold, inline code, italics. Unknown markup
 // passes through verbatim.
 func RenderMarkdown(src string) string {
 	var out strings.Builder
-	inFence := false
+	ms := &mdStream{}
 	for _, line := range strings.Split(src, "\n") {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(trimmed, "```"):
-			inFence = !inFence
-			continue
-		case inFence:
-			out.WriteString(ansiGray + "  │ " + line + ansiReset + "\n")
-			continue
-		case strings.HasPrefix(line, "### "):
-			out.WriteString(ansiBold + ansiCyan + line[4:] + ansiReset + "\n")
-		case strings.HasPrefix(line, "## "):
-			out.WriteString(ansiBold + ansiCyan + line[3:] + ansiReset + "\n")
-		case strings.HasPrefix(line, "# "):
-			out.WriteString(ansiBold + ansiCyan + line[2:] + ansiReset + "\n")
-		case trimmed == "":
-			out.WriteString("\n")
-		default:
-			out.WriteString(renderInline(line) + "\n")
+		if r := ms.feedLine(line); r != "" {
+			out.WriteString(r + "\n")
 		}
 	}
 	return strings.TrimRight(out.String(), "\n")

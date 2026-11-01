@@ -19,6 +19,7 @@ import (
 	"fm-agent/internal/safety"
 	"fm-agent/internal/serve"
 	"fm-agent/internal/session"
+	"fm-agent/internal/term"
 	"fm-agent/internal/tools"
 	"fm-agent/internal/tui"
 )
@@ -125,21 +126,25 @@ func run() int {
 	}
 
 	if interactive {
-		ui := tui.New(ag, store, sharedReader(prompter), os.Stdout, name)
-		// Stills the spinner while the user answers confirmations.
-		pausing := &tui.PausingPrompter{Inner: prompter, Pause: ui.PauseFlag()}
-		reg.SetPrompter(pausing)
-		ag.SetToolPrinter(ui.ToolPrinter())
-		if err := ui.Run(ctx); err != nil {
-			fmt.Fprintln(os.Stderr, "fm-agent:", err)
-			return 1
+		if restore, err := term.MakeRaw(os.Stdin); err == nil && os.Getenv("TERM") != "dumb" {
+			defer restore()
+			keys := tui.ParseKeys(os.Stdin)
+			app := tui.NewApp(ag, store, os.Stdout, keys, name)
+			ag.SetOut(app.StreamWriter())
+			ag.SetToolPrinter(app.ToolPrinter())
+			ag.SetToolEventPrinter(app.ToolEventPrinter())
+			reg.SetPrompter(app.Prompter())
+			if err := app.Run(ctx); err != nil {
+				fmt.Fprintln(os.Stderr, "fm-agent:", err)
+				return 1
+			}
+			return 0
 		}
-		return 0
 	}
 
 	r := repl.New(ag, store, sharedReader(prompter), os.Stdout, repl.Options{
 		SessionName: name,
-		Interactive: false,
+		Interactive: isTerminal(os.Stdin),
 	})
 	if err := r.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "fm-agent:", err)
