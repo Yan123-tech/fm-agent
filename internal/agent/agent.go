@@ -27,6 +27,8 @@ type Agent struct {
 
 	maxIter int
 
+	windowTokens int
+
 	history   []serve.Message
 	lastUsage *serve.Usage
 }
@@ -41,6 +43,9 @@ type Options struct {
 	Out io.Writer
 	// MaxIterations caps the tool-call loop; zero uses DefaultMaxIterations.
 	MaxIterations int
+	// WindowTokens sets the assumed context window; zero uses
+	// DefaultWindowTokens.
+	WindowTokens int
 }
 
 // New builds an Agent. workspaceRoots is only used to render the system
@@ -55,16 +60,20 @@ func New(srv *serve.Server, reg *tools.Registry, workspaceRoots []string, opts O
 	if opts.MaxIterations <= 0 {
 		opts.MaxIterations = DefaultMaxIterations
 	}
+	if opts.WindowTokens <= 0 {
+		opts.WindowTokens = DefaultWindowTokens
+	}
 	prompt := opts.SystemPrompt
 	if prompt == "" {
 		prompt = DefaultSystemPrompt(workspaceRoots, reg)
 	}
 	a := &Agent{
-		srv:     srv,
-		reg:     reg,
-		model:   opts.Model,
-		out:     opts.Out,
-		maxIter: opts.MaxIterations,
+		srv:          srv,
+		reg:          reg,
+		model:        opts.Model,
+		out:          opts.Out,
+		maxIter:      opts.MaxIterations,
+		windowTokens: opts.WindowTokens,
 	}
 	a.history = append(a.history, serve.Message{Role: "system", Content: prompt})
 	return a
@@ -96,12 +105,21 @@ func (a *Agent) Clear() {
 	a.history = a.history[:1]
 }
 
+// compactThreshold is the fill level (75%) at which old history is
+// compacted before the next model call.
+func (a *Agent) compactThreshold() int { return a.windowTokens * 3 / 4 }
+
 // Run processes one user message: it loops calling the model and executing
 // requested tool calls until the model answers with plain text.
 func (a *Agent) Run(ctx context.Context, userText string) error {
 	a.history = append(a.history, serve.Message{Role: "user", Content: userText})
 
 	for iter := 0; iter < a.maxIter; iter++ {
+		if a.EstimateTokens() >= a.compactThreshold() && len(a.history) > compactionKeep+1 {
+			if err := a.Compact(ctx); err != nil {
+				fmt.Fprintf(a.out, "(auto-compaction failed: %v)\n", err)
+			}
+		}
 		req := &serve.ChatRequest{
 			Model:    a.model,
 			Messages: append([]serve.Message(nil), a.history...),
