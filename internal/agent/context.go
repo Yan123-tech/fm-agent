@@ -27,10 +27,18 @@ const toolsOverhead = 700
 const compactionKeep = 4
 
 // WindowTokens returns the configured context window.
-func (a *Agent) WindowTokens() int { return a.windowTokens }
+func (a *Agent) WindowTokens() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.windowTokens
+}
 
 // SetWindowTokens overrides the context window estimate.
-func (a *Agent) SetWindowTokens(n int) { a.windowTokens = n }
+func (a *Agent) SetWindowTokens(n int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.windowTokens = n
+}
 
 // EstimateTokens heuristically estimates the tokens the next request will
 // occupy: system prompt + transcript + tool specs. It deliberately
@@ -38,6 +46,13 @@ func (a *Agent) SetWindowTokens(n int) { a.windowTokens = n }
 // harmless while overflowing it fails the request. When the server reports
 // usage, the measured prompt tokens of the last request are used as a floor.
 func (a *Agent) EstimateTokens() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.estimateTokens()
+}
+
+// estimateTokens is the lock-free core; callers must hold a.mu.
+func (a *Agent) estimateTokens() int {
 	total := toolsOverhead
 	for _, m := range a.history {
 		total += 4 + estimateMessageTokens(m)
@@ -71,14 +86,17 @@ func estimateStringTokens(s string) int {
 // most recent messages intact. It is triggered automatically when the
 // estimated prompt approaches the window, and manually via /compact.
 func (a *Agent) Compact(ctx context.Context) error {
+	a.mu.Lock()
 	msgs := a.history[1:] // skip system
 	if len(msgs) <= compactionKeep {
+		a.mu.Unlock()
 		return errors.New("nothing to compact yet")
 	}
 	old, recent := msgs[:len(msgs)-compactionKeep], msgs[len(msgs)-compactionKeep:]
+	a.mu.Unlock()
 
 	req := &serve.ChatRequest{
-		Model: a.model,
+		Model: a.Model(),
 		Messages: []serve.Message{
 			{
 				Role: "system",
@@ -100,7 +118,9 @@ func (a *Agent) Compact(ctx context.Context) error {
 
 	marker := fmt.Sprintf("<conversation_summary>\n%s\n</conversation_summary>\n"+
 		"The above summary replaces earlier messages in this conversation. Treat it as your memory of what happened.", summary)
+	a.mu.Lock()
 	a.history = append([]serve.Message{a.history[0], {Role: "user", Content: marker}}, recent...)
+	a.mu.Unlock()
 	return nil
 }
 
