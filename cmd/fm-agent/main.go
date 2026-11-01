@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"fm-agent/internal/agent"
 	"fm-agent/internal/repl"
@@ -23,6 +24,8 @@ import (
 	"fm-agent/internal/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 func main() {
@@ -127,6 +130,14 @@ func run() int {
 	}
 
 	if interactive {
+		// Force a color profile from the environment: profile auto-detection
+		// queries the terminal (OSC 11 / DSR) and late responses leak into
+		// stdin as garbage key events.
+		lipgloss.SetColorProfile(termenv.EnvColorProfile())
+		// Discard any terminal query responses still in the input queue
+		// (bubbletea queries at import time, before we get control).
+		drainStdin()
+
 		m := tui.New(ag, store, name)
 		prog := tea.NewProgram(m, tea.WithAltScreen())
 		m.SetProgram(prog)
@@ -165,6 +176,23 @@ func sharedReader(p safety.Prompter) *bufio.Reader {
 func isTerminal(f *os.File) bool {
 	st, err := f.Stat()
 	return err == nil && st.Mode()&os.ModeCharDevice != 0
+}
+
+// drainStdin briefly waits for in-flight terminal query responses (OSC 11 /
+// DSR replies to color-detection queries) and discards whatever is pending,
+// so they cannot leak into the UI as phantom keystrokes. Only safe at
+// startup, before the user has had a chance to type anything meaningful.
+func drainStdin() {
+	time.Sleep(150 * time.Millisecond)
+	_ = syscall.SetNonblock(int(os.Stdin.Fd()), true)
+	defer syscall.SetNonblock(int(os.Stdin.Fd()), false)
+	buf := make([]byte, 4096)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if n == 0 || err != nil {
+			return
+		}
+	}
 }
 
 type multiFlag []string
