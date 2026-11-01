@@ -230,10 +230,12 @@ func NewListFiles(ws *safety.Workspace) Tool { return &listFiles{ws} }
 
 func (t *listFiles) Spec() serve.Tool {
 	return spec("list_files",
-		"List files in the workspace matching a glob pattern (*, ?, **). Directories and .git are skipped.",
+		"List workspace files. BEST: call with empty arguments {} to get the COMPLETE recursive "+
+			"file tree including all subdirectories. Use pattern only to narrow down: "+
+			"\"*.go\" = root level only, \"internal/**\" = one subtree, \"**/*_test.go\" = matching files everywhere.",
 		map[string]any{
-			"pattern": strProp("Glob pattern, e.g. \"*.go\" or \"internal/**/*.go\""),
-		}, nil)
+			"pattern": strProp("Optional glob (*, ?, **). Omit for the full recursive tree."),
+		}, []string{"pattern"})
 }
 
 type listArgs struct {
@@ -330,10 +332,11 @@ func NewSearch(ws *safety.Workspace) Tool { return &search{ws} }
 
 func (t *search) Spec() serve.Tool {
 	return spec("search",
-		"Search file contents by regular expression. Returns matching lines with file:line. .git is skipped.",
+		"Search file contents by regular expression, recursively through the whole workspace "+
+			"(including all subdirectories). Returns matching lines with file:line. .git is skipped.",
 		map[string]any{
 			"pattern": strProp("RE2 regular expression"),
-			"path":    strProp("File or directory to search (default: whole workspace)"),
+			"path":    strProp("Optional file or subdirectory to limit the search to"),
 		}, []string{"path"})
 }
 

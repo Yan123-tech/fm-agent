@@ -144,6 +144,14 @@ func TestListFilesGlob(t *testing.T) {
 	if strings.Contains(res, "main.go") || strings.Contains(res, "README") {
 		t.Errorf("unexpected matches:\n%s", res)
 	}
+
+	// No pattern: full recursive tree.
+	res, _, _ = reg.Run(context.Background(), call("list_files", map[string]any{}))
+	for _, want := range []string{"main.go", "internal/a/x.go", "internal/b/y.go", "README.md"} {
+		if !strings.Contains(res, want) {
+			t.Errorf("no-pattern listing missing %s:\n%s", want, res)
+		}
+	}
 }
 
 func TestSearchRegexp(t *testing.T) {
