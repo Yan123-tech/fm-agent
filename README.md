@@ -15,11 +15,20 @@ the model's small (~4K token) window.
 - `fm` CLI available (`/usr/bin/fm`) with the license accepted (`sudo fm license`)
 - Go ≥ 1.22
 
-## Build
+## Build & install
 
 ```sh
+# build into the current directory
 go build -o fm-agent ./cmd/fm-agent
+
+# or install to ~/.local/bin (no sudo; already on PATH in most shells)
+make install
+fm-agent            # now runnable from any directory
 ```
+
+If `~/.local/bin` is not on your PATH yet, add to your shell rc:
+`export PATH="$HOME/.local/bin:$PATH"`. Override the location with
+`make install PREFIX=/usr/local/bin`.
 
 ## Usage
 
