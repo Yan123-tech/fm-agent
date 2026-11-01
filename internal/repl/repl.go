@@ -106,7 +106,14 @@ func (r *REPL) Run(ctx context.Context) error {
 
 // command handles slash commands; it reports whether the loop should exit.
 func (r *REPL) command(ctx context.Context, text string) (bool, error) {
-	fields := strings.Fields(text)
+	return ExecCommand(ctx, r.ag, r.store, r.sessionName, text, r.out)
+}
+
+// ExecCommand executes a single slash-command line against the agent and
+// store, writing any output to out. It returns true when the session should
+// end (/exit, /quit). Shared by the plain REPL and the TUI.
+func ExecCommand(ctx context.Context, ag *agent.Agent, store *session.Store, sessionName, line string, out io.Writer) (bool, error) {
+	fields := strings.Fields(line)
 	name := fields[0]
 	args := fields[1:]
 
@@ -114,7 +121,7 @@ func (r *REPL) command(ctx context.Context, text string) (bool, error) {
 	case "/exit", "/quit":
 		return true, nil
 	case "/help":
-		fmt.Fprint(r.out, `commands:
+		fmt.Fprint(out, `commands:
   /exit, /quit   leave the session
   /clear         drop conversation history
   /compact       summarize older messages to free context
@@ -124,32 +131,32 @@ func (r *REPL) command(ctx context.Context, text string) (bool, error) {
 `)
 		return false, nil
 	case "/clear":
-		r.ag.Clear()
-		return false, r.autosave()
+		ag.Clear()
+		return false, store.Save(sessionName, ag.History())
 	case "/compact":
-		if err := r.ag.Compact(ctx); err != nil {
+		if err := ag.Compact(ctx); err != nil {
 			return false, err
 		}
-		fmt.Fprintf(r.out, "compacted (est. %d tokens)\n", r.ag.EstimateTokens())
-		return false, r.autosave()
+		fmt.Fprintf(out, "compacted (est. %d tokens)\n", ag.EstimateTokens())
+		return false, store.Save(sessionName, ag.History())
 	case "/model":
 		if len(args) != 1 {
 			return false, fmt.Errorf("usage: /model <system|pcc>")
 		}
-		r.ag.SetModel(args[0])
-		fmt.Fprintf(r.out, "model set to %s\n", args[0])
+		ag.SetModel(args[0])
+		fmt.Fprintf(out, "model set to %s\n", args[0])
 		return false, nil
 	case "/save":
-		name := r.sessionName
+		name := sessionName
 		if len(args) == 1 {
 			name = args[0]
 		} else if len(args) > 1 {
 			return false, fmt.Errorf("usage: /save [name]")
 		}
-		if err := r.store.Save(name, r.ag.History()); err != nil {
+		if err := store.Save(name, ag.History()); err != nil {
 			return false, err
 		}
-		fmt.Fprintf(r.out, "saved to %s\n", r.store.Path(name))
+		fmt.Fprintf(out, "saved to %s\n", store.Path(name))
 		return false, nil
 	default:
 		return false, fmt.Errorf("unknown command %q (try /help)", name)

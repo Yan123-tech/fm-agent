@@ -31,6 +31,8 @@ type Agent struct {
 
 	measuredPrompt int
 
+	toolPrinter func(name string)
+
 	history   []serve.Message
 	lastUsage *serve.Usage
 }
@@ -48,6 +50,9 @@ type Options struct {
 	// WindowTokens sets the assumed context window; zero uses
 	// DefaultWindowTokens.
 	WindowTokens int
+	// ToolPrinter overrides the per-tool-call status line; nil prints the
+	// default "  ⚒ name" line to Out.
+	ToolPrinter func(name string)
 }
 
 // New builds an Agent. workspaceRoots is only used to render the system
@@ -76,6 +81,7 @@ func New(srv *serve.Server, reg *tools.Registry, workspaceRoots []string, opts O
 		out:          opts.Out,
 		maxIter:      opts.MaxIterations,
 		windowTokens: opts.WindowTokens,
+		toolPrinter:  opts.ToolPrinter,
 	}
 	a.history = append(a.history, serve.Message{Role: "system", Content: prompt})
 	return a
@@ -86,6 +92,10 @@ func (a *Agent) Model() string { return a.model }
 
 // SetModel switches the model for subsequent requests.
 func (a *Agent) SetModel(m string) { a.model = m }
+
+// SetToolPrinter swaps the per-tool-call status line printer; it takes
+// effect from the next Run.
+func (a *Agent) SetToolPrinter(fn func(string)) { a.toolPrinter = fn }
 
 // History returns a copy of the conversation transcript including the
 // system message.
@@ -152,7 +162,11 @@ func (a *Agent) Run(ctx context.Context, userText string) error {
 			if err != nil {
 				result = "Error: " + err.Error()
 			}
-			fmt.Fprintf(a.out, "  ⚒ %s\n", tc.Function.Name)
+			if a.toolPrinter != nil {
+				a.toolPrinter(tc.Function.Name)
+			} else {
+				fmt.Fprintf(a.out, "  ⚒ %s\n", tc.Function.Name)
+			}
 			a.history = append(a.history, serve.Message{
 				Role:       "tool",
 				ToolCallID: tc.ID,

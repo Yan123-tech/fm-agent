@@ -67,6 +67,12 @@ func (r *Registry) add(t Tool) {
 	r.byName[name] = t
 }
 
+// SetPrompter replaces the prompter used for confirmations and ask_user.
+// Must be called before the registry is used concurrently.
+func (r *Registry) SetPrompter(p safety.Prompter) {
+	r.prompter = p
+}
+
 // Specs returns the tool descriptors, sorted by name for determinism.
 func (r *Registry) Specs() []serve.Tool {
 	names := append([]string(nil), r.order...)
