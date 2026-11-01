@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -106,7 +107,7 @@ func (fs *scriptedServer) requestCount() int {
 	return len(fs.requests)
 }
 
-func newTestAgent(t *testing.T, srv *serve.Server, out *bytes.Buffer) (*Agent, string) {
+func newTestAgent(t *testing.T, srv *serve.Server, out io.Writer) (*Agent, string) {
 	t.Helper()
 	dir := t.TempDir()
 	ws, err := safety.NewWorkspace(dir)
@@ -116,6 +117,21 @@ func newTestAgent(t *testing.T, srv *serve.Server, out *bytes.Buffer) (*Agent, s
 	reg := tools.NewRegistry(ws, fakePrompter{})
 	a := New(srv, reg, ws.Roots(), Options{Model: "system", Out: out})
 	return a, dir
+}
+
+func newTestAgentOpts(t *testing.T, srv *serve.Server, out io.Writer, opts Options) (*Agent, string) {
+	t.Helper()
+	if opts.Model == "" {
+		opts.Model = "system"
+	}
+	opts.Out = out
+	dir := t.TempDir()
+	ws, err := safety.NewWorkspace(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(ws, fakePrompter{})
+	return New(srv, reg, ws.Roots(), opts), dir
 }
 
 func TestRunExecutesToolCallsThenAnswers(t *testing.T) {

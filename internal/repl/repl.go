@@ -117,6 +117,7 @@ func (r *REPL) command(ctx context.Context, text string) (bool, error) {
 		fmt.Fprint(r.out, `commands:
   /exit, /quit   leave the session
   /clear         drop conversation history
+  /compact       summarize older messages to free context
   /model <name>  switch model (system, pcc)
   /save [name]   save transcript (default: current session)
   /help          this help
@@ -124,6 +125,12 @@ func (r *REPL) command(ctx context.Context, text string) (bool, error) {
 		return false, nil
 	case "/clear":
 		r.ag.Clear()
+		return false, r.autosave()
+	case "/compact":
+		if err := r.ag.Compact(ctx); err != nil {
+			return false, err
+		}
+		fmt.Fprintf(r.out, "compacted (est. %d tokens)\n", r.ag.EstimateTokens())
 		return false, r.autosave()
 	case "/model":
 		if len(args) != 1 {
