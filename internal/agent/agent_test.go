@@ -72,7 +72,22 @@ func (fs *scriptedServer) handle(w http.ResponseWriter, r *http.Request) {
 	if idx >= len(fs.responses) {
 		msg = serve.Message{Role: "assistant", Content: "done"}
 	} else {
-		if err := json.Unmarshal([]byte(fs.responses[idx]), &msg); err != nil {
+		canned := fs.responses[idx]
+		// "ERROR:<code>:<message>" replays an API error instead of a message.
+		if rest, ok := strings.CutPrefix(canned, "ERROR:"); ok {
+			code, message, _ := strings.Cut(rest, ":")
+			w.WriteHeader(http.StatusBadRequest)
+			errBody, _ := json.Marshal(map[string]any{
+				"error": map[string]any{
+					"message": message,
+					"type":    "invalid_request_error",
+					"code":    code,
+				},
+			})
+			w.Write(errBody)
+			return
+		}
+		if err := json.Unmarshal([]byte(canned), &msg); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}

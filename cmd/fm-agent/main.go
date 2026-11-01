@@ -32,7 +32,7 @@ func run() int {
 		resume     = flag.String("resume", "", "resume a saved session by name")
 		sessionFlg = flag.String("session", "", "session name for autosave (default: value of -resume or \"default\")")
 		allowPaths multiFlag
-		window     = flag.Int("window", agent.DefaultWindowTokens, "assumed context window in tokens")
+		window     = flag.Int("window", agent.DefaultWindowTokens, "assumed context window in tokens (auto-shrinks on overflow)")
 	)
 	flag.Var(&allowPaths, "allow-path", "additional allowed directory (repeatable)")
 	flag.Parse()

@@ -69,9 +69,13 @@ internal/session  JSONL transcript persistence
 
 ## Notes and limitations
 
-- The on-device model has a ~4096-token context window; the agent compacts
-  old turns automatically and truncates tool results. It is a capable helper,
-  not a frontier model — small, verifiable steps work best.
+- The on-device model has a limited context window (8192 tokens on current
+  devices, 4096 on older ones; `fm serve` does not report it). The agent
+  starts at 8192, measures real prompt usage from the server, and on
+  `context_length_exceeded` halves the window, compacts old turns and
+  retries — tune with `--window` if needed. Tool results are truncated to
+  fit. The model is a capable helper, not a frontier reasoner — small,
+  verifiable steps work best.
 - `fm serve` is beta software; behavior may change between macOS builds.
   Errors like `content_filter` stop the turn, transient service errors are
   retried with backoff.

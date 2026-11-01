@@ -10,9 +10,14 @@ import (
 	"fm-agent/internal/serve"
 )
 
-// DefaultWindowTokens is the documented context window of the on-device
-// model. Newer devices raise it to 8192; it can be tuned via Options.
-const DefaultWindowTokens = 4096
+// DefaultWindowTokens is the context window of the on-device model on
+// current devices (macOS 27 reports 8192 via fm chat). Older devices ship a
+// 4096-token model; the agent detects overflow at runtime and shrinks
+// automatically. Override with Options.WindowTokens or the --window flag.
+const DefaultWindowTokens = 8192
+
+// MinWindowTokens is the lowest the adaptive window will shrink to.
+const MinWindowTokens = 2048
 
 // toolsOverhead approximates the prompt tokens consumed by the tool specs
 // sent on every request.
@@ -30,11 +35,15 @@ func (a *Agent) SetWindowTokens(n int) { a.windowTokens = n }
 // EstimateTokens heuristically estimates the tokens the next request will
 // occupy: system prompt + transcript + tool specs. It deliberately
 // overestimates (~3.3 chars/token) because under-filling the window is
-// harmless while overflowing it fails the request.
+// harmless while overflowing it fails the request. When the server reports
+// usage, the measured prompt tokens of the last request are used as a floor.
 func (a *Agent) EstimateTokens() int {
 	total := toolsOverhead
 	for _, m := range a.history {
 		total += 4 + estimateMessageTokens(m)
+	}
+	if a.measuredPrompt > total {
+		total = a.measuredPrompt
 	}
 	return total
 }
