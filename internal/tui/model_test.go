@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -243,21 +244,62 @@ func TestModelEscInterruptsRun(t *testing.T) {
 	e.quit()
 }
 
+var ansiStrip = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
 func TestModelToolBlocks(t *testing.T) {
 	tool := `{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"list_files","arguments":"{\"pattern\":\"*\"}"}}]}`
-	e := newEnv(t, tool, `{"role":"assistant","content":"listed"}`)
+	e := newEnv(t, tool, `{"role":"assistant","content":"final answer after tool"}`)
 	e.typeText("list")
 	e.enter()
 	s := e.waitFor(t, 5*time.Second, func(s snapshot) bool { return !s.running }, "run finished")
-	var sawTool bool
+	var sawTool, sawAnswer bool
 	for _, b := range s.blocks {
 		if b.kind == blockTool && !b.pend && b.name == "list_files" {
 			sawTool = true
+		}
+		if b.kind == blockAssistant && strings.Contains(ansiStrip.ReplaceAllString(b.rendered, ""), "final answer after tool") {
+			sawAnswer = true
 		}
 	}
 	if !sawTool {
 		t.Error("completed tool block missing")
 	}
+	if !sawAnswer {
+		t.Error("answer after tool call missing (dropped deltas)")
+	}
+	e.quit()
+}
+
+func TestModelResizeReflows(t *testing.T) {
+	e := newEnv(t, `{"role":"assistant","content":"some reasonably long answer that will wrap differently at different widths"}`)
+	e.typeText("hi")
+	e.enter()
+	e.waitFor(t, 5*time.Second, func(s snapshot) bool {
+		for _, b := range s.blocks {
+			if b.kind == blockAssistant && b.rendered != "" {
+				return true
+			}
+		}
+		return false
+	}, "assistant answer")
+	before := e.snap()
+	var renderedBefore string
+	for _, b := range before.blocks {
+		if b.kind == blockAssistant {
+			renderedBefore = b.rendered
+		}
+	}
+
+	e.prog.Send(tea.WindowSizeMsg{Width: 40, Height: 20})
+	s := e.waitFor(t, 3*time.Second, func(s snapshot) bool {
+		for _, b := range s.blocks {
+			if b.kind == blockAssistant && b.rendered != "" && b.rendered != renderedBefore {
+				return true
+			}
+		}
+		return false
+	}, "reflowed render at new width")
+	_ = s
 	e.quit()
 }
 

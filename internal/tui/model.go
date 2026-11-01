@@ -95,15 +95,15 @@ type Model struct {
 	ag          *agent.Agent
 	store       *session.Store
 	sessionName string
-
-	vp viewport.Model
-	ta textarea.Model
-	sp spinner.Model
+	vp          viewport.Model
+	ta          textarea.Model
+	sp          spinner.Model
 
 	width, height int
 	ready         bool
 
 	blocks   []*block
+	active   *block // assistant block currently receiving streamed deltas
 	running  bool
 	cancel   context.CancelFunc
 	confirm  *confirmMsg
@@ -167,6 +167,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ready = true
 		m.layout()
 		m.recreateRenderer()
+		// Re-render assistant blocks at the new wrap width and rebuild the
+		// viewport so the transcript reflows instead of keeping stale lines.
+		if m.renderer != nil {
+			for _, b := range m.blocks {
+				if b.kind == blockAssistant && b.raw != "" {
+					if r, err := m.renderer.Render(b.raw); err == nil {
+						b.rendered = strings.TrimRight(r, "\n")
+					}
+				}
+			}
+		}
+		m.refreshContent()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -178,12 +190,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case deltaMsg:
-		if n := len(m.blocks); n > 0 && m.blocks[n-1].kind == blockAssistant {
-			b := m.blocks[n-1]
-			b.raw += string(msg)
+		// Deltas belong to the in-flight assistant turn, even when tool
+		// blocks were appended after it.
+		if m.active != nil {
+			m.active.raw += string(msg)
 			if m.renderer != nil {
-				if r, err := m.renderer.Render(b.raw); err == nil {
-					b.rendered = strings.TrimRight(r, "\n")
+				if r, err := m.renderer.Render(m.active.raw); err == nil {
+					m.active.rendered = strings.TrimRight(r, "\n")
 					m.refreshContent()
 				}
 			}
@@ -220,6 +233,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = styleErr.Render("error: " + msg.err.Error())
 		} else {
 			m.status = ""
+		}
+		// Finalize the in-flight assistant block. If streamed deltas were
+		// missed (e.g. races), fall back to the final message in history.
+		if m.active != nil {
+			m.syncBlockFromHistory(m.active)
+			m.active = nil
 		}
 		_ = m.store.Save(m.sessionName, m.ag.History())
 		m.refreshContent()
@@ -347,6 +366,7 @@ func (m *Model) submit() {
 	}
 
 	m.blocks = append(m.blocks, &block{kind: blockAssistant})
+	m.active = m.blocks[len(m.blocks)-1]
 	m.refreshContent()
 	m.running = true
 
@@ -372,7 +392,10 @@ func (m *Model) layout() {
 	}
 	m.ta.SetWidth(m.width - 2)
 	m.ta.SetHeight(inputH)
-	bodyH := m.height - inputH - 1 // status bar
+	// Rows: viewport body + divider + input + status bar must equal the
+	// window height exactly; one row too many makes the terminal scroll
+	// every frame and the renderer desyncs.
+	bodyH := m.height - inputH - 2
 	if bodyH < 1 {
 		bodyH = 1
 	}
@@ -380,13 +403,38 @@ func (m *Model) layout() {
 	m.vp.Height = bodyH
 }
 
+// syncBlockFromHistory backfills an assistant block from the final
+// assistant message of the transcript; used when streamed deltas were
+// dropped so the answer is never lost.
+func (m *Model) syncBlockFromHistory(b *block) {
+	if b == nil {
+		return
+	}
+	hist := m.ag.History()
+	for i := len(hist) - 1; i >= 0; i-- {
+		if hist[i].Role == "assistant" && strings.TrimSpace(hist[i].Content) != "" {
+			if strings.TrimSpace(b.raw) != strings.TrimSpace(hist[i].Content) {
+				b.raw = hist[i].Content
+				if m.renderer != nil {
+					if r, err := m.renderer.Render(b.raw); err == nil {
+						b.rendered = strings.TrimRight(r, "\n")
+					}
+				}
+			}
+			return
+		}
+	}
+}
+
 // recreateRenderer rebuilds the markdown renderer for the current width.
 func (m *Model) recreateRenderer() {
 	if m.width <= 0 {
 		return
 	}
+	// Fixed style: auto-detection queries the terminal (OSC 11/DSR) and the
+	// late responses leak into stdin as garbage key events.
 	r, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStandardStyle("dark"),
 		glamour.WithWordWrap(max(m.width-4, 20)),
 	)
 	if err == nil {
