@@ -35,16 +35,16 @@ type Options struct {
 	Interactive bool
 }
 
-// New builds a REPL. The same in reader should back the safety prompter so
-// buffered input is shared between confirmations and the prompt loop.
-func New(ag *agent.Agent, store *session.Store, in io.Reader, out io.Writer, opts Options) *REPL {
+// New builds a REPL over a shared buffered reader (the same one that backs
+// the safety prompter, so buffered input is never lost between the two).
+func New(ag *agent.Agent, store *session.Store, in *bufio.Reader, out io.Writer, opts Options) *REPL {
 	if opts.SessionName == "" {
 		opts.SessionName = DefaultSessionName
 	}
 	return &REPL{
 		ag:          ag,
 		store:       store,
-		in:          bufio.NewReader(in),
+		in:          in,
 		out:         out,
 		interactive: opts.Interactive,
 		sessionName: opts.SessionName,
