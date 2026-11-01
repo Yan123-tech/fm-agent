@@ -50,6 +50,14 @@ The agent confines all file and shell operations to the working directory
 (plus `--allow-path` roots). `write_file`, `edit_file` and `run_command` ask
 for confirmation unless `--yes` is given.
 
+## Interface
+
+In a terminal you get the chat-style TUI: a thinking spinner, markdown
+rendering (bold, inline code, fenced blocks, headers), styled tool-call
+lines, and a status bar with the estimated context usage. Flags: `--plain`
+forces the old line-based interface (also used automatically when stdin is
+piped).
+
 ### Commands inside the REPL
 
 | command | effect |

@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -19,6 +20,7 @@ import (
 	"fm-agent/internal/serve"
 	"fm-agent/internal/session"
 	"fm-agent/internal/tools"
+	"fm-agent/internal/tui"
 )
 
 func main() {
@@ -33,6 +35,7 @@ func run() int {
 		sessionFlg = flag.String("session", "", "session name for autosave (default: value of -resume or \"default\")")
 		allowPaths multiFlag
 		window     = flag.Int("window", agent.DefaultWindowTokens, "assumed context window in tokens (auto-shrinks on overflow)")
+		plain      = flag.Bool("plain", false, "use the plain line-based interface instead of the TUI")
 	)
 	flag.Var(&allowPaths, "allow-path", "additional allowed directory (repeatable)")
 	flag.Parse()
@@ -75,12 +78,25 @@ func run() int {
 		prompter = safety.NewIOPrompter(bufio.NewReader(os.Stdin), os.Stdout)
 	}
 
+	interactive := isTerminal(os.Stdin) && !*plain
+
 	reg := tools.NewRegistry(ws, prompter)
-	ag := agent.New(srv, reg, ws.Roots(), agent.Options{
-		Model:        *model,
-		Out:          os.Stdout,
-		WindowTokens: *window,
-	})
+	var opts agent.Options
+	if interactive {
+		// The TUI renders the final answer itself; streaming goes nowhere.
+		opts = agent.Options{
+			Model:        *model,
+			Out:          io.Discard,
+			WindowTokens: *window,
+		}
+	} else {
+		opts = agent.Options{
+			Model:        *model,
+			Out:          os.Stdout,
+			WindowTokens: *window,
+		}
+	}
+	ag := agent.New(srv, reg, ws.Roots(), opts)
 
 	store, err := session.NewStore()
 	if err != nil {
@@ -108,9 +124,22 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "resumed session %q (%d messages)\n", *resume, len(msgs))
 	}
 
+	if interactive {
+		ui := tui.New(ag, store, sharedReader(prompter), os.Stdout, name)
+		// Stills the spinner while the user answers confirmations.
+		pausing := &tui.PausingPrompter{Inner: prompter, Pause: ui.PauseFlag()}
+		reg.SetPrompter(pausing)
+		ag.SetToolPrinter(ui.ToolPrinter())
+		if err := ui.Run(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "fm-agent:", err)
+			return 1
+		}
+		return 0
+	}
+
 	r := repl.New(ag, store, sharedReader(prompter), os.Stdout, repl.Options{
 		SessionName: name,
-		Interactive: isTerminal(os.Stdin),
+		Interactive: false,
 	})
 	if err := r.Run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "fm-agent:", err)
