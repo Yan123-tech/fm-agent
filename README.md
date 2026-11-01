@@ -50,6 +50,25 @@ The agent confines all file and shell operations to the working directory
 (plus `--allow-path` roots). `write_file`, `edit_file` and `run_command` ask
 for confirmation unless `--yes` is given.
 
+## Tuning for the on-device model
+
+The on-device model is auto-routed by Apple (compact variants up to ~20B
+parameters) with a 4096–8192-token window. fm-agent is tuned to get the most
+out of it:
+
+- **Greedy decoding by default** (`--temperature 0`) — forum-tested as far
+  more reliable for code and tool arguments; raise it for varied prose.
+- **Generation caps** (`--max-tokens`, default 900) so a runaway reply cannot
+  stall the tool loop or flood the context.
+- **Compact imperative system prompt with one worked example** — small
+  variants follow structure, large ones are not constrained.
+- **Resilient tools**: `read_file` returns content verbatim (no line-number
+  gutter the model could copy into edits), `edit_file`/`write_file`
+  auto-strip pasted gutters and tolerate stale trailing newlines, and the
+  loop stops if the model repeats the same call three times.
+- **Adaptive context**: measured prompt tokens + auto-compaction + window
+  shrink on overflow.
+
 ## Interface
 
 In a terminal you get a full-screen, Claude Code style interface built on

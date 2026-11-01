@@ -95,8 +95,11 @@ func (a *Agent) Compact(ctx context.Context) error {
 	old, recent := msgs[:len(msgs)-compactionKeep], msgs[len(msgs)-compactionKeep:]
 	a.mu.Unlock()
 
+	temp := 0.0
 	req := &serve.ChatRequest{
-		Model: a.Model(),
+		Model:               a.Model(),
+		Temperature:         &temp,
+		MaxCompletionTokens: CompactMaxTokens,
 		Messages: []serve.Message{
 			{
 				Role: "system",
