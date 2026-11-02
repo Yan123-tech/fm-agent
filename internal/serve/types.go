@@ -38,7 +38,9 @@ type ChatRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
 	Tools    []Tool    `json:"tools,omitempty"`
-	Stream   bool      `json:"stream,omitempty"`
+	// Stream is always sent explicitly: fm serve returns an event stream
+	// when stream is absent, even for clients that expect one JSON body.
+	Stream bool `json:"stream"`
 	// Temperature below ~0.05 selects greedy decoding — markedly more
 	// reliable for tool arguments and code.
 	Temperature *float64 `json:"temperature,omitempty"`

@@ -2,10 +2,12 @@ package serve
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,8 +17,14 @@ import (
 // fakeFM runs an HTTP handler on a Unix socket and returns the socket path.
 func fakeFM(t *testing.T, handler http.HandlerFunc) string {
 	t.Helper()
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "fm.sock")
+	// Keep the socket path short: macOS sun_path limit is ~104 bytes and
+	// t.TempDir() paths can exceed it once the test name is included.
+	tmp, err := os.MkdirTemp("", "fmsrv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	sock := filepath.Join(tmp, "s.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
@@ -145,5 +153,30 @@ func TestChatDoesNotRetryFatalError(t *testing.T) {
 	}
 	if apiErr.Retryable() {
 		t.Error("context_length_exceeded must not be retried")
+	}
+}
+
+// fm serve returns an SSE stream when "stream" is absent from the request;
+// a non-streaming client must send stream:false explicitly and still parse.
+func TestChatNonStreamAgainstSSEDefaultServer(t *testing.T) {
+	sock := fakeFM(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if stream, ok := body["stream"].(bool); ok && !stream {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"plain json"},"finish_reason":"stop"}]}`)
+			return
+		}
+		// No explicit stream:false -> this server (like fm serve) streams.
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"sse\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	})
+	s := NewServer("fm", sock)
+	resp, err := s.Chat(context.Background(), &ChatRequest{Model: "system"})
+	if err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+	if resp.Message.Content != "plain json" {
+		t.Errorf("content = %q", resp.Message.Content)
 	}
 }

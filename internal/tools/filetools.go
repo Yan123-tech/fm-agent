@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -76,6 +78,9 @@ func (t *readFile) Execute(_ context.Context, args json.RawMessage) (string, err
 	if err != nil {
 		return "", err
 	}
+	if hint := dirHint(a.Path, abs); hint != "" {
+		return "", fmt.Errorf("%s", hint)
+	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		return "", err
@@ -104,6 +109,50 @@ func (t *readFile) Execute(_ context.Context, args json.RawMessage) (string, err
 	b.WriteString(truncated)
 	b.WriteString(strings.Join(lines[start-1:end], "\n"))
 	return b.String(), nil
+}
+
+// verifySyntax runs a lightweight syntax check for known file types and
+// returns diagnostics when the file does not parse. Stdout is discarded so
+// formatters cannot flood the tool result; only stderr matters.
+func verifySyntax(abs string) string {
+	var cmd *exec.Cmd
+	switch strings.ToLower(filepath.Ext(abs)) {
+	case ".py":
+		cmd = exec.Command("python3", "-c", "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read())", abs)
+	case ".go":
+		cmd = exec.Command("gofmt", "-e", abs)
+	case ".js", ".mjs", ".cjs":
+		if _, err := exec.LookPath("node"); err != nil {
+			return ""
+		}
+		cmd = exec.Command("node", "--check", abs)
+	default:
+		return ""
+	}
+	var stderr strings.Builder
+	cmd.Stdout = io.Discard
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := stderr.String()
+		if msg == "" {
+			msg = err.Error()
+		}
+		const max = 700
+		if len(msg) > max {
+			msg = msg[:max] + "…"
+		}
+		return fmt.Sprintf("\n⚠ Syntax check failed — the file does not parse. Fix it:\n%s", msg)
+	}
+	return ""
+}
+
+// dirHint returns an actionable error message when abs is a directory,
+// giving the model a recovery path instead of a bare OS error.
+func dirHint(path, abs string) string {
+	if st, err := os.Stat(abs); err == nil && st.IsDir() {
+		return fmt.Sprintf("%q is a directory, not a file — use list_files with path %q to see its contents", path, path)
+	}
+	return ""
 }
 
 func isBinary(data []byte) bool {
@@ -169,14 +218,20 @@ func (t *writeFile) Execute(_ context.Context, args json.RawMessage) (string, er
 	if err != nil {
 		return "", err
 	}
+	if hint := dirHint(a.Path, abs); hint != "" {
+		return "", fmt.Errorf("%s", hint)
+	}
 	content := stripCopiedGutter(a.Content)
+	if len(content) > MaxWriteChars {
+		return "", fmt.Errorf("content too large (%d chars, limit %d): write the file in parts", len(content), MaxWriteChars)
+	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Wrote %s (%d bytes)", a.Path, len(content)), nil
+	return fmt.Sprintf("Wrote %s (%d bytes)%s", a.Path, len(content), verifySyntax(abs)), nil
 }
 
 // --- edit_file ---
@@ -223,9 +278,16 @@ func (t *editFile) Execute(_ context.Context, args json.RawMessage) (string, err
 	// strip it when it clearly came from tool output.
 	a.OldString = stripCopiedGutter(a.OldString)
 	a.NewString = stripCopiedGutter(a.NewString)
+	if len(a.OldString) > MaxEditChars || len(a.NewString) > MaxEditChars {
+		return "", fmt.Errorf("edit too large (%d/%d chars, limit %d): make several smaller, targeted edits instead",
+			len(a.OldString), len(a.NewString), MaxEditChars)
+	}
 	abs, err := t.ws.Resolve(a.Path)
 	if err != nil {
 		return "", err
+	}
+	if hint := dirHint(a.Path, abs); hint != "" {
+		return "", fmt.Errorf("%s", hint)
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
@@ -252,7 +314,7 @@ func (t *editFile) Execute(_ context.Context, args json.RawMessage) (string, err
 		return "", err
 	}
 	oldLines := strings.Count(a.OldString, "\n") + 1
-	return fmt.Sprintf("Edited %s: replaced %d line(s)", a.Path, oldLines), nil
+	return fmt.Sprintf("Edited %s: replaced %d line(s)%s", a.Path, oldLines, verifySyntax(abs)), nil
 }
 
 // gutterNorm strips a copied line-number gutter from one line: optional
