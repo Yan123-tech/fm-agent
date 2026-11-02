@@ -22,6 +22,13 @@ const (
 	MaxListResults = 100
 	// MaxSearchResults caps search matches.
 	MaxSearchResults = 50
+	// MaxEditChars caps edit_file strings: large replacements are the main
+	// source of duplicated/broken content with on-device models; small
+	// targeted edits parse and review far better. Sized so one function or
+	// block fits, but a whole-file rewrite does not.
+	MaxEditChars = 1200
+	// MaxWriteChars caps write_file content (a generous whole-file budget).
+	MaxWriteChars = 16000
 )
 
 // Tool is a single callable agent tool.

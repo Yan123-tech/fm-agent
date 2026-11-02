@@ -72,6 +72,71 @@ func TestReadFileVerbatimAndTruncated(t *testing.T) {
 	}
 }
 
+func TestEditSizeCap(t *testing.T) {
+	reg, _ := setup(t)
+	big := strings.Repeat("x", MaxEditChars+1)
+	res, _, _ := reg.Run(context.Background(), call("edit_file", map[string]any{
+		"path": "f.txt", "old_string": big, "new_string": "y",
+	}))
+	if !strings.Contains(res, "edit too large") {
+		t.Errorf("expected size error, got: %s", res)
+	}
+	res, _, _ = reg.Run(context.Background(), call("write_file", map[string]any{
+		"path": "big.py", "content": strings.Repeat("y", MaxWriteChars+1),
+	}))
+	if !strings.Contains(res, "too large") {
+		t.Errorf("expected write size error, got: %s", res)
+	}
+}
+
+func TestSyntaxVerification(t *testing.T) {
+	reg, _ := setup(t)
+
+	// Broken Python: verification warning is attached.
+	res, _, _ := reg.Run(context.Background(), call("write_file", map[string]any{
+		"path":    "broken.py",
+		"content": "def f(:\n    pass\n",
+	}))
+	if !strings.Contains(res, "Syntax check failed") {
+		t.Errorf("expected syntax warning, got: %s", res)
+	}
+
+	// Valid Python: no warning.
+	res, _, _ = reg.Run(context.Background(), call("write_file", map[string]any{
+		"path":    "ok.py",
+		"content": "def f():\n    pass\n",
+	}))
+	if strings.Contains(res, "Syntax check failed") {
+		t.Errorf("unexpected syntax warning: %s", res)
+	}
+
+	// Edit introducing a syntax error is reported too.
+	res, _, _ = reg.Run(context.Background(), call("edit_file", map[string]any{
+		"path":       "ok.py",
+		"old_string": "def f():",
+		"new_string": "def f(:",
+	}))
+	if !strings.Contains(res, "Syntax check failed") {
+		t.Errorf("expected syntax warning after bad edit, got: %s", res)
+	}
+}
+
+func TestReadFileOnDirectoryGivesActionableError(t *testing.T) {
+	reg, dir := setup(t)
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res, _, _ := reg.Run(context.Background(), call("read_file", map[string]any{"path": "sub"}))
+	if !strings.Contains(res, "is a directory") || !strings.Contains(res, "list_files") {
+		t.Errorf("expected actionable directory hint, got: %s", res)
+	}
+	// An empty path resolves to the workspace root — same hint.
+	res, _, _ = reg.Run(context.Background(), call("read_file", map[string]any{"path": ""}))
+	if !strings.Contains(res, "is a directory") {
+		t.Errorf("expected directory hint for root, got: %s", res)
+	}
+}
+
 func TestWriteFileConfinedAndConfirmed(t *testing.T) {
 	reg, dir := setup(t)
 	res, approved, err := reg.Run(context.Background(), call("write_file", map[string]any{
